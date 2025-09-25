@@ -52,6 +52,7 @@ class VariableSetRequest(BaseModel):
     variables: Dict[str, str] = Field(..., description="Environment variables to set")
 
 class DeploymentTriggerRequest(BaseModel):
+    project_id: str = Field(..., description="Railway project ID")
     service_id: str = Field(..., description="Railway service ID")
     environment_id: Optional[str] = Field(None, description="Environment ID")
 
@@ -108,7 +109,8 @@ async def root():
         "service": "Railway Operations Service",
         "status": "healthy",
         "timestamp": datetime.utcnow().isoformat(),
-        "version": "1.0.0"
+        "version": "1.0.1",
+        "code_update": "variable_setting_fixed"
     }
 
 @app.post("/services/create", response_model=ServiceResponse)
@@ -177,8 +179,7 @@ async def set_variables(
     # Get environment ID if not provided
     environment_id = request.environment_id
     if not environment_id:
-        # Query to get the production environment ID
-        env_query = """
+        query = """
         query project($id: String!) {
           project(id: $id) {
             environments {
@@ -193,11 +194,13 @@ async def set_variables(
         }
         """
         
+        variables = {"id": request.project_id}
+        
         try:
-            env_result = client.execute_query(env_query, {"id": request.project_id})
-            environments = env_result["project"]["environments"]["edges"]
+            result = client.execute_query(query, variables)
+            environments = result["project"]["environments"]["edges"]
             
-            # Find production environment
+            # Look for production environment first
             for env in environments:
                 if env["node"]["name"].lower() == "production":
                     environment_id = env["node"]["id"]
@@ -219,11 +222,7 @@ async def set_variables(
     for key, value in request.variables.items():
         mutation = """
         mutation variableUpsert($input: VariableUpsertInput!) {
-          variableUpsert(input: $input) {
-            id
-            name
-            value
-          }
+          variableUpsert(input: $input)
         }
         """
         
@@ -239,8 +238,13 @@ async def set_variables(
         
         try:
             result = client.execute_query(mutation, variables)
-            success_vars.append(key)
-            logger.info(f"Successfully set variable: {key}")
+            if result.get("variableUpsert") is True:
+                success_vars.append(key)
+                logger.info(f"Successfully set variable: {key}")
+            else:
+                error_msg = f"Failed to set {key}: Unexpected response"
+                error_vars.append(error_msg)
+                logger.error(error_msg)
             
         except Exception as e:
             error_msg = f"Failed to set {key}: {str(e)}"
@@ -258,33 +262,62 @@ async def trigger_deployment(
     request: DeploymentTriggerRequest,
     client: RailwayClient = Depends(get_railway_client)
 ):
-    """Trigger a new deployment for a service"""
+    """Trigger a new deployment for a service by restarting the latest deployment"""
     
     logger.info(f"Triggering deployment for service: {request.service_id}")
     
-    mutation = """
-    mutation serviceRedeploy($serviceId: String!) {
-      serviceRedeploy(serviceId: $serviceId) {
-        id
-        status
-        createdAt
+    # First, get the latest deployment for the service
+    get_deployment_query = """
+    query deployments($projectId: String!, $serviceId: String!) {
+      deployments(
+        first: 1
+        input: {
+          projectId: $projectId
+          serviceId: $serviceId
+        }
+      ) {
+        edges {
+          node {
+            id
+            status
+            createdAt
+          }
+        }
       }
     }
     """
     
-    variables = {"serviceId": request.service_id}
+    get_variables = {
+        "projectId": request.project_id,
+        "serviceId": request.service_id
+    }
     
     try:
-        result = client.execute_query(mutation, variables)
-        deployment = result["serviceRedeploy"]
+        # Get the latest deployment
+        result = client.execute_query(get_deployment_query, get_variables)
+        deployments = result["deployments"]["edges"]
         
-        logger.info(f"Deployment triggered: {deployment['id']}")
+        if not deployments:
+            raise HTTPException(status_code=404, detail="No deployments found for this service")
+        
+        latest_deployment_id = deployments[0]["node"]["id"]
+        
+        # Now restart the deployment
+        restart_mutation = """
+        mutation deploymentRestart($deploymentId: String!) {
+          deploymentRestart(id: $deploymentId)
+        }
+        """
+        
+        restart_variables = {"deploymentId": latest_deployment_id}
+        restart_result = client.execute_query(restart_mutation, restart_variables)
+        
+        logger.info(f"Deployment restarted: {latest_deployment_id}")
         
         return {
             "success": True,
-            "deployment_id": deployment["id"],
-            "status": deployment["status"],
-            "created_at": deployment["createdAt"]
+            "deployment_id": latest_deployment_id,
+            "restarted": restart_result["deploymentRestart"]
         }
         
     except Exception as e:
@@ -303,14 +336,7 @@ async def get_service_status(
       service(id: $id) {
         id
         name
-        icon
         createdAt
-        latestDeployment {
-          id
-          status
-          createdAt
-          url
-        }
       }
     }
     """
@@ -325,7 +351,6 @@ async def get_service_status(
             "service_id": service["id"],
             "name": service["name"],
             "created_at": service["createdAt"],
-            "latest_deployment": service.get("latestDeployment"),
             "status": "active"
         }
         
