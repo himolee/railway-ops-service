@@ -54,7 +54,7 @@ class VariableSetRequest(BaseModel):
 class DeploymentTriggerRequest(BaseModel):
     project_id: str = Field(..., description="Railway project ID")
     service_id: str = Field(..., description="Railway service ID")
-    environment_id: Optional[str] = Field(None, description="Environment ID")
+    environment_id: Optional[str] = Field(None, description="Environment ID (optional, defaults to production)")
 
 class ServiceResponse(BaseModel):
     id: str
@@ -268,19 +268,15 @@ async def trigger_deployment(
     
     # First, get the latest deployment for the service
     get_deployment_query = """
-    query deployments($projectId: String!, $serviceId: String!) {
-      deployments(
-        first: 1
-        input: {
-          projectId: $projectId
-          serviceId: $serviceId
-        }
-      ) {
+    query deployments($first: Int, $input: DeploymentListInput!) {
+      deployments(first: $first, input: $input) {
         edges {
           node {
             id
             status
             createdAt
+            url
+            canRedeploy
           }
         }
       }
@@ -288,8 +284,12 @@ async def trigger_deployment(
     """
     
     get_variables = {
-        "projectId": request.project_id,
-        "serviceId": request.service_id
+        "first": 1,
+        "input": {
+            "projectId": request.project_id,
+            "serviceId": request.service_id,
+            "environmentId": request.environment_id
+        }
     }
     
     try:
