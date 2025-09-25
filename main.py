@@ -110,7 +110,8 @@ async def root():
         "status": "healthy",
         "timestamp": datetime.utcnow().isoformat(),
         "version": "1.0.1",
-        "code_update": "variable_setting_fixed"
+        "code_update": "deployment_trigger_fixed_with_environment_id",
+        "last_updated": "2025-09-25T04:40:00Z"
     }
 
 @app.post("/services/create", response_model=ServiceResponse)
