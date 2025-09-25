@@ -109,9 +109,10 @@ async def root():
         "service": "Railway Operations Service",
         "status": "healthy",
         "timestamp": datetime.utcnow().isoformat(),
-        "version": "1.0.1",
-        "code_update": "deployment_trigger_fixed_with_environment_id",
-        "last_updated": "2025-09-25T04:40:00Z"
+        "version": "1.0.2",
+        "code_update": "deployment_trigger_fixed_with_environment_id_FORCE_REBUILD",
+        "last_updated": "2025-09-25T04:47:30Z",
+        "deployment_fix": "environment_id_parameter_added"
     }
 
 @app.post("/services/create", response_model=ServiceResponse)
